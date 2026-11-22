@@ -9,3 +9,5 @@ __pycache__/
 *.m4a
 venv/
 .venv/
+whatsapp_qr/node_modules/
+whatsapp_qr/auth_info/

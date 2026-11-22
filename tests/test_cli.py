@@ -29,6 +29,9 @@ def test_cli_morse_subcommand(capsys):
     assert main(["morse", ".... .. / -.-. .--"]) == 0
     assert capsys.readouterr().out.strip() == "HI CW"
 
+    assert main(["morse", "--", "-... --- -"]) == 0
+    assert capsys.readouterr().out.strip() == "BOT"
+
 
 def test_cli_doctor(capsys):
     assert main(["doctor"]) == 0

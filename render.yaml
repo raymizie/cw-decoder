@@ -1,23 +1,9 @@
 services:
   - type: web
     name: cw-decoder-whatsapp
-    runtime: python
+    runtime: docker
     plan: free
-    buildCommand: pip install -r requirements.txt
-    startCommand: gunicorn wsgi:app --bind 0.0.0.0:$PORT --workers 2 --threads 4 --timeout 120
     healthCheckPath: /health
     envVars:
-      - key: PYTHON_VERSION
-        value: "3.11.9"
-      - key: WHATSAPP_PROVIDER
-        value: auto
-      - key: META_VERIFY_TOKEN
-        value: cw-decoder-verify-token
-      - key: META_ACCESS_TOKEN
-        sync: false
-      - key: META_PHONE_NUMBER_ID
-        sync: false
-      - key: TWILIO_ACCOUNT_SID
-        sync: false
-      - key: TWILIO_AUTH_TOKEN
-        sync: false
+      - key: ALLOW_GROUP_AUDIO
+        value: "false"

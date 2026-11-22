@@ -81,59 +81,44 @@ python cw_cli.py morse ".... . .-.. .-.. ---"
 
 ---
 
-## 3. Versi WhatsApp (`run_whatsapp.py`)
+## 3. Versi WhatsApp — Tanpa Token (Imbas Kod QR) ⭐ *Disyorkan untuk Render*
 
-Menyokong kedua-dua **Meta WhatsApp Cloud API** dan **Twilio WhatsApp**.
+Tidak perlu akaun Meta Developers, tidak perlu Twilio, dan **tiada sebarang token**! Hanya imbas **Kod QR** daripada aplikasi WhatsApp telefon anda (*Linked Devices / Peranti Dipautkan*).
 
-1. Isi kelayakan dalam `.env`:
-   - **Meta Cloud API**: `META_VERIFY_TOKEN`, `META_ACCESS_TOKEN`, `META_PHONE_NUMBER_ID`
-   - **Twilio**: `TWILIO_ACCOUNT_SID`, `TWILIO_AUTH_TOKEN`, `PUBLIC_BASE_URL`
-2. Jalankan pelayan webhook:
-   ```bash
-   python run_whatsapp.py
-   ```
-3. Dedahkan port `5000` kepada internet HTTPS (contohnya menggunakan `ngrok http 5000` atau `cloudflared tunnel --url http://localhost:5000`).
-4. Tetapkan URL Webhook:
-   - **Meta Cloud API**: `https://<domain-anda>/webhook/meta` (atau `/webhook`)
-   - **Twilio Sandbox**: `https://<domain-anda>/webhook/twilio` (atau `/webhook`)
-   - **Semakan kesihatan**: `GET /health`
-
----
-
-## Deploy WhatsApp Bot ke GitHub + Render
-
-Projek ini sudah sedia untuk **Render** ([wsgi.py](wsgi.py), [render.yaml](render.yaml), [Procfile](Procfile), dan `imageio-ffmpeg` terbina dalam `requirements.txt` supaya *voice note* `.ogg`/`.opus` terus disokong).
+### Deploy ke GitHub + Render (Percuma, Tanpa Token)
+Projek ini menggunakan [Dockerfile](Dockerfile) (Node.js Baileys + Python CW Decoder + FFmpeg) dan [render.yaml](render.yaml):
 
 1. **Tolak projek ke GitHub**:
    ```bash
    git init
    git add .
-   git commit -m "Initial commit: CW Decoder (CLI, Telegram, WhatsApp)"
+   git commit -m "Initial commit: CW Decoder (CLI, Telegram, WhatsApp QR)"
    git branch -M main
    git remote add origin https://github.com/<USERNAME_ANDA>/cw-decoder.git
    git push -u origin main
    ```
 2. **Deploy di Render**:
-   - Buka [dashboard.render.com](https://dashboard.render.com) → **New +** → **Web Service** (atau **Blueprint** untuk baca `render.yaml` secara automatik).
+   - Buka [dashboard.render.com](https://dashboard.render.com) → **New +** → **Web Service** (atau **Blueprint**).
    - Sambungkan repositori GitHub `cw-decoder`.
-   - Tetapan (jika guna Web Service manual):
-     - **Runtime**: `Python 3`
-     - **Build Command**: `pip install -r requirements.txt`
-     - **Start Command**: `gunicorn wsgi:app --bind 0.0.0.0:$PORT --workers 2 --threads 4 --timeout 120`
-   - Masukkan **Environment Variables** mengikut penyedia WhatsApp anda:
-     - **Twilio WhatsApp Sandbox (paling cepat untuk cuba)**:
-       - `TWILIO_ACCOUNT_SID`
-       - `TWILIO_AUTH_TOKEN`
-     - **Meta WhatsApp Cloud API**:
-       - `META_VERIFY_TOKEN` (cth: `cw-decoder-verify-token`)
-       - `META_ACCESS_TOKEN`
-       - `META_PHONE_NUMBER_ID`
-3. **Sambungkan Webhook WhatsApp**:
-   - Buka `https://<nama-service-anda>.onrender.com/health` untuk pastikan `"status": "ok"` dan `"ffmpeg_available": true`.
-   - **Twilio Sandbox**: di Twilio Console → *Messaging → Try it out → Send a WhatsApp message → Sandbox settings* → letak **When a message comes in**:
-     `https://<nama-service-anda>.onrender.com/webhook/twilio` (Method: `POST`).
-   - **Meta Cloud API**: di Meta Developers → *WhatsApp → Configuration → Webhook* → letak **Callback URL**:
-     `https://<nama-service-anda>.onrender.com/webhook/meta` dan **Verify Token** yang sama dengan `META_VERIFY_TOKEN`, kemudian *Subscribe* medan `messages`.
+   - Pilih **Runtime / Language**: `Docker` (atau biar Render kesan `Dockerfile` secara automatik).
+   - **Tiada Environment Variable / Token wajib diisi!** Terus klik **Create Web Service**.
+3. **Imbas Kod QR**:
+   - Selepas *deploy* selesai, buka URL Render anda di pelayar:
+     `https://<nama-app-anda>.onrender.com/qr`
+   - Di telefon anda: buka **WhatsApp → Peranti Dipautkan (Linked Devices) → Pautkan Peranti** → imbas kod QR di skrin.
+4. **Cuba terus di WhatsApp**:
+   - Anda boleh uji terus dengan menghantar mesej ke **chat diri sendiri (Message Yourself)** atau dari nombor lain:
+     - Taip `/help`
+     - Taip `/encode HELLO WORLD` → bot balas *voice note* bunyi CW!
+     - Hantar **voice note / audio bunyi CW** → bot terus balas teks yang dinyahkod, kod Morse, WPM & frekuensi (Hz)!
+
+> **Nota Render Free Tier**: Pelan percuma Render memadam cakera sementara apabila servis dimulakan semula / di-deploy semula, jadi jika servis tidur lama atau di-redeploy, cuma buka `/qr` semula dan imbas dalam 5 saat.
+
+### Pilihan Alternatif: WhatsApp Webhook API (Meta Cloud API / Twilio)
+Jika anda mahu guna API rasmi Meta Cloud API atau Twilio melalui Flask ([run_whatsapp.py](run_whatsapp.py) / [wsgi.py](wsgi.py)):
+1. Isi kelayakan dalam `.env` (`META_*` atau `TWILIO_*`).
+2. Jalankan `python run_whatsapp.py` atau di Render guna `gunicorn wsgi:app --bind 0.0.0.0:$PORT`.
+3. Tetapkan webhook ke `/webhook/meta` atau `/webhook/twilio`.
 
 ---
 

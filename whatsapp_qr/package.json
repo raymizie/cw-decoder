@@ -1,0 +1,14 @@
+{
+  "name": "cw-decoder-whatsapp-qr",
+  "version": "1.0.0",
+  "description": "Bot WhatsApp tanpa token (imbas kod QR) untuk CW Decoder menggunakan Baileys + enjin Python DSP",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js"
+  },
+  "dependencies": {
+    "@whiskeysockets/baileys": "^6.7.16",
+    "pino": "^9.5.0",
+    "qrcode": "^1.5.4"
+  }
+}

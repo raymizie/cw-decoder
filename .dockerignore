@@ -1,0 +1,13 @@
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.git/
+.env
+whatsapp_qr/node_modules/
+whatsapp_qr/auth_info/
+*.wav
+*.ogg
+*.mp3
+*.m4a
+venv/
+.venv/
