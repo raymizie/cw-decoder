@@ -43,6 +43,8 @@ const HELP_TEXT = [
   "",
   "*Arahan Tersedia:*",
   "• Hantar voice note / audio → Nyahkod CW kepada teks",
+  "• Reply `/decode` pada mana-mana voice note/audio → Nyahkod audio tersebut (sesuai untuk Group!)",
+  "• `/cwauto on` / `/cwauto off` → Hidup/matikan auto-decode semua audio dalam Group ini",
   "• `/encode <teks>` → Jana voice note bunyi CW untuk ujian",
   "  _(Contoh: `/encode --wpm 18 --freq 700 HELLO WORLD`)_",
   "• `/morse <kod>` → Nyahkod kod Morse teks",
@@ -51,7 +53,14 @@ const HELP_TEXT = [
   "• `/help` → Papar panduan ini",
 ].join("\n");
 
-const BOT_REPLY_PREFIXES = ["📡", "⚠️", "❌", "🔤", "•−", "🔊"];
+const BOT_REPLY_PREFIXES = ["📡", "⚠️", "❌", "🔤", "•−", "🔊", "✅"];
+
+// Per-group auto-decode overrides toggled via `/cwauto on` or `/cwauto off`
+const groupAutoDecode = new Map();
+function isGroupAutoEnabled(jid) {
+  if (groupAutoDecode.has(jid)) return groupAutoDecode.get(jid);
+  return ALLOW_GROUP_AUDIO;
+}
 
 // State for web dashboard & QR page
 const state = {
@@ -220,6 +229,30 @@ function extractAudioInfo(message) {
   return null;
 }
 
+function extractQuotedAudio(content, remoteJid) {
+  const ctx = content?.extendedTextMessage?.contextInfo;
+  const quotedMsg = ctx?.quotedMessage;
+  if (!quotedMsg) return null;
+  const unwrapped =
+    quotedMsg.ephemeralMessage?.message ||
+    quotedMsg.viewOnceMessage?.message ||
+    quotedMsg.viewOnceMessageV2?.message ||
+    quotedMsg;
+  const audioInfo = extractAudioInfo(unwrapped);
+  if (!audioInfo) return null;
+  return {
+    audioInfo,
+    downloadableMsg: {
+      key: {
+        remoteJid,
+        id: ctx.stanzaId,
+        participant: ctx.participant,
+      },
+      message: unwrapped,
+    },
+  };
+}
+
 function isSelfChat(remoteJid, sockUser) {
   if (!remoteJid || !sockUser) return false;
   const normRemote = jidNormalizedUser(remoteJid);
@@ -234,6 +267,46 @@ async function sendText(sock, jid, text, quoted) {
   return sent;
 }
 
+async function decodeAndReply(sock, remoteJid, downloadableMsg, ext, quoteTarget) {
+  const tmpAudio = makeTempPath(ext);
+  try {
+    const buffer = await downloadMediaMessage(
+      downloadableMsg,
+      "buffer",
+      {},
+      { logger: pino({ level: "silent" }), reuploadRequest: sock.updateMediaMessage }
+    );
+    fs.writeFileSync(tmpAudio, buffer);
+    const result = await decodeAudioFile(tmpAudio);
+    await sendText(sock, remoteJid, formatDecodeResult(result), quoteTarget);
+  } catch (err) {
+    console.error("[CW Decode Error]", err);
+    await sendText(sock, remoteJid, `❌ *Gagal menyahkod audio:* ${err.message || err}`, quoteTarget);
+  } finally {
+    safeUnlink(tmpAudio);
+  }
+}
+
+const EXPLICIT_COMMANDS = new Set([
+  "/help",
+  "!help",
+  "/start",
+  "!start",
+  "/cwhelp",
+  "/decode",
+  "!decode",
+  "/cwauto",
+  "!cwauto",
+  "/encode",
+  "!encode",
+  "/cw",
+  "!cw",
+  "/morse",
+  "!morse",
+  "/tomorse",
+  "!tomorse",
+]);
+
 async function handleIncomingMessage(sock, msg) {
   if (!msg || !msg.message) return;
   const remoteJid = msg.key?.remoteJid;
@@ -243,9 +316,6 @@ async function handleIncomingMessage(sock, msg) {
   const isGroup = remoteJid.endsWith("@g.us");
   const selfChat = isSelfChat(remoteJid, sock.user);
 
-  // Ignore own outgoing messages to other people; allow self-chat ("Message Yourself") for easy testing
-  if (msg.key?.fromMe && !selfChat) return;
-
   // Unwrap ephemeral / viewOnce wrappers if present
   const content =
     msg.message.ephemeralMessage?.message ||
@@ -254,44 +324,89 @@ async function handleIncomingMessage(sock, msg) {
     msg.message;
 
   const text = extractMessageText(content);
+  const firstWord = text ? text.split(/\s+/)[0].toLowerCase() : "";
+  const rest = text ? text.slice(firstWord.length).trim() : "";
 
-  // Extra safeguard in self-chat: never re-process our own formatted bot responses
+  // Safeguard: never re-process our own formatted bot replies
   if (msg.key?.fromMe && BOT_REPLY_PREFIXES.some((p) => text.startsWith(p))) {
     return;
   }
 
-  // 1. Audio / Voice note decoding
+  // For own outgoing messages (`fromMe`):
+  // - In self-chat: allow everything (audio + commands + raw Morse)
+  // - In groups/DMs: allow explicit commands (/decode, /encode, /help, /cwauto, etc.) and group audio when auto-decode is ON
+  const isExplicitCmd = EXPLICIT_COMMANDS.has(firstWord);
   const audioInfo = extractAudioInfo(content);
-  if (audioInfo) {
-    if (isGroup && !ALLOW_GROUP_AUDIO && !text.toLowerCase().includes("decode")) {
+  if (msg.key?.fromMe && !selfChat) {
+    const allowOwnGroupAudio = Boolean(isGroup && audioInfo && isGroupAutoEnabled(remoteJid));
+    if (!isExplicitCmd && !allowOwnGroupAudio) {
       return;
     }
-    const tmpAudio = makeTempPath(audioInfo.ext);
-    try {
-      const buffer = await downloadMediaMessage(
-        msg,
-        "buffer",
-        {},
-        { logger: pino({ level: "silent" }), reuploadRequest: sock.updateMediaMessage }
-      );
-      fs.writeFileSync(tmpAudio, buffer);
-      const result = await decodeAudioFile(tmpAudio);
-      await sendText(sock, remoteJid, formatDecodeResult(result), msg);
-    } catch (err) {
-      console.error("[CW Decode Error]", err);
-      await sendText(sock, remoteJid, `❌ *Gagal menyahkod audio:* ${err.message || err}`, msg);
-    } finally {
-      safeUnlink(tmpAudio);
+  }
+
+  // 1. Direct audio / voice note decoding
+  if (audioInfo) {
+    if (isGroup && !isGroupAutoEnabled(remoteJid) && !text.toLowerCase().includes("decode")) {
+      return;
     }
+    await decodeAndReply(sock, remoteJid, msg, audioInfo.ext, msg);
     return;
   }
 
   if (!text) return;
 
-  // 2. Text commands (/help, !help, /encode, !encode, /morse, /tomorse, or raw dots/dashes)
-  const firstWord = text.split(/\s+/)[0].toLowerCase();
-  const rest = text.slice(firstWord.length).trim();
+  // 2. Reply `/decode` to a quoted voice note / audio message (works in groups & DMs)
+  if (["/decode", "!decode"].includes(firstWord)) {
+    const quoted = extractQuotedAudio(content, remoteJid);
+    if (!quoted) {
+      await sendText(
+        sock,
+        remoteJid,
+        "⚠️ Sila *Reply* mesej voice note atau fail audio dengan `/decode`.",
+        msg
+      );
+      return;
+    }
+    await decodeAndReply(sock, remoteJid, quoted.downloadableMsg, quoted.audioInfo.ext, msg);
+    return;
+  }
 
+  // 3. Toggle auto-decode for the current group (`/cwauto on` | `/cwauto off`)
+  if (["/cwauto", "!cwauto"].includes(firstWord)) {
+    if (!isGroup) {
+      await sendText(sock, remoteJid, "✅ Dalam chat peribadi, auto-decode sentiasa aktif.", msg);
+      return;
+    }
+    const mode = rest.toLowerCase();
+    if (mode === "on" || mode === "hidup") {
+      groupAutoDecode.set(remoteJid, true);
+      await sendText(
+        sock,
+        remoteJid,
+        "✅ *Auto-decode Group AKTIF.* Semua voice note / audio yang dihantar dalam group ini akan dinyahkod automatik.",
+        msg
+      );
+    } else if (mode === "off" || mode === "mati") {
+      groupAutoDecode.set(remoteJid, false);
+      await sendText(
+        sock,
+        remoteJid,
+        "✅ *Auto-decode Group DIMATIKAN.* Untuk nyahkod audio dalam group, cuma *Reply* audio tersebut dengan `/decode`.",
+        msg
+      );
+    } else {
+      const curr = isGroupAutoEnabled(remoteJid) ? "AKTIF (ON)" : "MATI (OFF)";
+      await sendText(
+        sock,
+        remoteJid,
+        `📡 Status auto-decode group ini: *${curr}*\nGuna \`/cwauto on\` atau \`/cwauto off\`.`,
+        msg
+      );
+    }
+    return;
+  }
+
+  // 4. Other text commands (/help, /encode, /morse, /tomorse, raw Morse)
   if (["/help", "!help", "/start", "!start", "/cwhelp"].includes(firstWord)) {
     await sendText(sock, remoteJid, HELP_TEXT, msg);
     return;

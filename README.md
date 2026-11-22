@@ -106,11 +106,15 @@ Projek ini menggunakan [Dockerfile](Dockerfile) (Node.js Baileys + Python CW Dec
    - Selepas *deploy* selesai, buka URL Render anda di pelayar:
      `https://<nama-app-anda>.onrender.com/qr`
    - Di telefon anda: buka **WhatsApp → Peranti Dipautkan (Linked Devices) → Pautkan Peranti** → imbas kod QR di skrin.
-4. **Cuba terus di WhatsApp**:
-   - Anda boleh uji terus dengan menghantar mesej ke **chat diri sendiri (Message Yourself)** atau dari nombor lain:
+4. **Cuba terus di WhatsApp (Chat Peribadi & Group)**:
+   - **Chat peribadi / diri sendiri (*Message Yourself*)**:
      - Taip `/help`
      - Taip `/encode HELLO WORLD` → bot balas *voice note* bunyi CW!
-     - Hantar **voice note / audio bunyi CW** → bot terus balas teks yang dinyahkod, kod Morse, WPM & frekuensi (Hz)!
+     - Hantar **voice note / audio bunyi CW** → bot terus balas teks dinyahkod, kod Morse, WPM & frekuensi (Hz)!
+   - **Dalam WhatsApp Group** (cuma masukkan nombor bot ke dalam group):
+     - **Cara 1 (On-demand — default, tidak ganggu voice note biasa)**: *Reply* mana-mana *voice note* / fail audio dalam group dengan `/decode` (atau `!decode`).
+     - **Cara 2 (Auto-decode semua audio dalam group tersebut)**: Taip `/cwauto on` dalam group (taip `/cwauto off` untuk matikan), atau tetapkan `ALLOW_GROUP_AUDIO=true` pada Environment Variables di Render supaya aktif untuk semua group.
+     - Arahan `/help`, `/encode <teks>`, `/morse <kod>`, `/tomorse <teks>` sentiasa berfungsi dalam group (termasuk daripada nombor anda sendiri).
 
 > **Nota Render Free Tier**: Pelan percuma Render memadam cakera sementara apabila servis dimulakan semula / di-deploy semula, jadi jika servis tidur lama atau di-redeploy, cuma buka `/qr` semula dan imbas dalam 5 saat.
 

@@ -1,11 +1,12 @@
 FROM node:20-slim
 
-# Pasang Python 3, NumPy, Rich, dan FFmpeg (untuk nyahkod voice note .ogg/.opus WhatsApp)
+# Pasang Python 3, NumPy, Rich, FFmpeg (untuk voice note .ogg/.opus) dan git (untuk npm Baileys)
 RUN apt-get update && apt-get install -y --no-install-recommends \
     python3 \
     python3-numpy \
     python3-rich \
     ffmpeg \
+    git \
     ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 
