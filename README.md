@@ -118,6 +118,15 @@ Projek ini menggunakan [Dockerfile](Dockerfile) (Node.js Baileys + Python CW Dec
 
 > **Nota Render Free Tier**: Pelan percuma Render memadam cakera sementara apabila servis dimulakan semula / di-deploy semula, jadi jika servis tidur lama atau di-redeploy, cuma buka `/qr` semula dan imbas dalam 5 saat.
 
+### Keep-Alive Multi-Servis dengan UptimeRobot (`/health`)
+Anda boleh gunakan **1 monitor UptimeRobot sahaja** (`https://<nama-app-anda>.onrender.com/health`, interval **5 minit**) untuk kekalkan servis ini **dan** ping servis-servis lain anda secara automatik:
+1. Di **Render → Environment Variables**, tambah `KEEPALIVE_URLS` dengan senarai URL servis lain (dipisahkan koma):
+   ```env
+   KEEPALIVE_URLS=https://servis-1.onrender.com/health,https://servis-2.onrender.com/health
+   ```
+2. Setiap kali UptimeRobot memanggil `/health` (`GET` atau `HEAD`), servis ini akan membalas `200 OK` serta-merta dan mem-ping semua URL dalam `KEEPALIVE_URLS` di latar belakang (had sela minimum default 60 saat; tambah `?force=1` untuk ujian segera).
+3. Buka `/health` di pelayar untuk melihat status setiap servis di bawah medan `keepalive.targets`.
+
 ### Pilihan Alternatif: WhatsApp Webhook API (Meta Cloud API / Twilio)
 Jika anda mahu guna API rasmi Meta Cloud API atau Twilio melalui Flask ([run_whatsapp.py](run_whatsapp.py) / [wsgi.py](wsgi.py)):
 1. Isi kelayakan dalam `.env` (`META_*` atau `TWILIO_*`).

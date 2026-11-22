@@ -7,3 +7,5 @@ services:
     envVars:
       - key: ALLOW_GROUP_AUDIO
         value: "false"
+      - key: KEEPALIVE_URLS
+        value: ""

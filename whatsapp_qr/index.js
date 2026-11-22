@@ -38,6 +38,24 @@ const PROJECT_ROOT = path.resolve(__dirname, "..");
 const CW_CLI_PATH = path.join(PROJECT_ROOT, "cw_cli.py");
 const AUTH_DIR = process.env.AUTH_DIR || path.join(__dirname, "auth_info");
 const ALLOW_GROUP_AUDIO = String(process.env.ALLOW_GROUP_AUDIO || "false").toLowerCase() === "true";
+const KEEPALIVE_URLS = Array.from(
+  new Set(
+    String(process.env.KEEPALIVE_URLS || "")
+      .split(/[\s,]+/)
+      .map((u) => u.trim())
+      .filter((u) => /^https?:\/\//i.test(u))
+  )
+);
+const rawKeepAliveTimeout = Number(process.env.KEEPALIVE_TIMEOUT_MS);
+const KEEPALIVE_TIMEOUT_MS = Math.max(
+  2000,
+  Math.min(60000, Number.isFinite(rawKeepAliveTimeout) && rawKeepAliveTimeout > 0 ? rawKeepAliveTimeout : 15000)
+);
+const rawKeepAliveInterval = Number(process.env.KEEPALIVE_MIN_INTERVAL_MS);
+const KEEPALIVE_MIN_INTERVAL_MS = Math.max(
+  5000,
+  Math.min(3600000, Number.isFinite(rawKeepAliveInterval) && rawKeepAliveInterval > 0 ? rawKeepAliveInterval : 60000)
+);
 
 const HELP_TEXT = [
   "📡 *CW Decoder — Bot WhatsApp (Tanpa Token)*",
@@ -714,11 +732,105 @@ function renderQrHtml() {
 </html>`;
 }
 
+// Keep-alive hub state for pinging other services when /health is hit
+const keepAliveState = {
+  inFlight: false,
+  lastRunAt: null,
+  lastRunMs: 0,
+  results: Object.fromEntries(
+    KEEPALIVE_URLS.map((targetUrl) => [
+      targetUrl,
+      { ok: null, status: "pending", httpStatus: null, latencyMs: null, checkedAt: null, error: null },
+    ])
+  ),
+};
+
+async function pingKeepAliveTarget(targetUrl) {
+  const started = Date.now();
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), KEEPALIVE_TIMEOUT_MS);
+  try {
+    const resp = await fetch(targetUrl, {
+      method: "GET",
+      redirect: "follow",
+      signal: controller.signal,
+      headers: { "User-Agent": "CW-Decoder-KeepAlive/1.0" },
+    });
+    if (resp.body && typeof resp.body.cancel === "function") {
+      resp.body.cancel().catch(() => {});
+    }
+    const latencyMs = Date.now() - started;
+    keepAliveState.results[targetUrl] = {
+      ok: resp.ok,
+      status: resp.ok ? "up" : "error",
+      httpStatus: resp.status,
+      latencyMs,
+      checkedAt: new Date().toISOString(),
+      error: resp.ok ? null : `HTTP ${resp.status}`,
+    };
+  } catch (err) {
+    const latencyMs = Date.now() - started;
+    const isTimeout = err && err.name === "AbortError";
+    keepAliveState.results[targetUrl] = {
+      ok: false,
+      status: "down",
+      httpStatus: null,
+      latencyMs,
+      checkedAt: new Date().toISOString(),
+      error: isTimeout ? `Timeout (${KEEPALIVE_TIMEOUT_MS}ms)` : String(err?.message || err),
+    };
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+function triggerKeepAlivePings(force = false) {
+  if (KEEPALIVE_URLS.length === 0 || keepAliveState.inFlight) return false;
+  const now = Date.now();
+  if (!force && keepAliveState.lastRunMs > 0 && now - keepAliveState.lastRunMs < KEEPALIVE_MIN_INTERVAL_MS) {
+    return false;
+  }
+
+  keepAliveState.inFlight = true;
+  keepAliveState.lastRunMs = now;
+
+  Promise.allSettled(KEEPALIVE_URLS.map((u) => pingKeepAliveTarget(u)))
+    .then(() => {
+      const upCount = Object.values(keepAliveState.results).filter((r) => r.ok).length;
+      console.log(`[KeepAlive] Ping selesai: ${upCount}/${KEEPALIVE_URLS.length} servis aktif.`);
+    })
+    .finally(() => {
+      keepAliveState.inFlight = false;
+      keepAliveState.lastRunAt = new Date().toISOString();
+    });
+
+  return true;
+}
+
 // Start HTTP server for Render health check + browser QR code scanner
 const server = http.createServer((req, res) => {
-  const url = (req.url || "/").split("?")[0];
-  if (url === "/health") {
-    res.writeHead(200, { "Content-Type": "application/json" });
+  let parsedUrl;
+  try {
+    parsedUrl = new URL(req.url || "/", "http://localhost");
+  } catch (_) {
+    res.writeHead(400, { "Content-Type": "text/plain" });
+    res.end("Bad Request");
+    return;
+  }
+  const url = parsedUrl.pathname;
+  if (url === "/health" || url === "/health/") {
+    const forcePing = ["1", "true", "yes"].includes(String(parsedUrl.searchParams.get("force") || "").toLowerCase());
+    const triggered = triggerKeepAlivePings(forcePing);
+    const headers = {
+      "Content-Type": "application/json",
+      "Cache-Control": "no-store",
+    };
+    if (req.method === "HEAD") {
+      res.writeHead(200, headers);
+      res.end();
+      return;
+    }
+    res.writeHead(200, headers);
     res.end(
       JSON.stringify({
         status: "ok",
@@ -726,6 +838,14 @@ const server = http.createServer((req, res) => {
         whatsapp_state: state.status,
         connected: state.status === "connected",
         started_at: state.startedAt,
+        uptime_sec: Math.floor(process.uptime()),
+        keepalive: {
+          configured: KEEPALIVE_URLS.length,
+          triggered,
+          in_flight: keepAliveState.inFlight,
+          last_run_at: keepAliveState.lastRunAt,
+          targets: keepAliveState.results,
+        },
       })
     );
     return;
@@ -767,6 +887,9 @@ const server = http.createServer((req, res) => {
 server.listen(PORT, "0.0.0.0", () => {
   console.log(`🌐 Pelayan CW Decoder WhatsApp QR berjalan di http://0.0.0.0:${PORT}`);
   console.log(`📱 Buka http://localhost:${PORT}/qr untuk imbas kod QR WhatsApp.`);
+  if (KEEPALIVE_URLS.length > 0) {
+    console.log(`💓 Keep-Alive Hub aktif untuk ${KEEPALIVE_URLS.length} servis sasaran apabila /health dipanggil.`);
+  }
   startWhatsApp().catch((err) => {
     state.lastError = String(err);
     console.error("Ralat memulakan WhatsApp:", err);
