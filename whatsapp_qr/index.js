@@ -23,6 +23,8 @@ const {
   downloadMediaMessage,
   fetchLatestBaileysVersion,
   jidNormalizedUser,
+  makeCacheableSignalKeyStore,
+  Browsers,
 } = require("@whiskeysockets/baileys");
 const pino = require("pino");
 const QRCode = require("qrcode");
@@ -72,9 +74,51 @@ const state = {
   startedAt: new Date().toISOString(),
 };
 
+// Simple bounded in-memory cache implementing Baileys CacheStore interface
+function createSimpleCache(maxSize = 1000) {
+  const map = new Map();
+  return {
+    get(key) {
+      return map.get(key);
+    },
+    set(key, val) {
+      map.set(key, val);
+      if (map.size > maxSize) {
+        const firstKey = map.keys().next().value;
+        map.delete(firstKey);
+      }
+    },
+    del(key) {
+      map.delete(key);
+    },
+    flushAll() {
+      map.clear();
+    },
+  };
+}
+
+const msgRetryCounterCache = createSimpleCache(1500);
+
+// Store recent sent & received WAMessageContent so Baileys `getMessage` can
+// re-encrypt messages on retry receipts (fixes "Waiting for this message")
+const messageStore = new Map();
+function rememberMessageContent(msg) {
+  const id = msg?.key?.id;
+  const jid = msg?.key?.remoteJid;
+  const content = msg?.message;
+  if (!id || !content) return;
+  if (jid) messageStore.set(`${jid}:${id}`, content);
+  messageStore.set(id, content);
+  if (messageStore.size > 1500) {
+    const first = messageStore.keys().next().value;
+    messageStore.delete(first);
+  }
+}
+
 // Track message IDs sent by this bot to prevent reply loops (especially in self-chat)
 const sentByBotIds = new Set();
 function rememberSentId(msg) {
+  rememberMessageContent(msg);
   const id = msg?.key?.id;
   if (!id) return;
   sentByBotIds.add(id);
@@ -490,23 +534,65 @@ async function handleIncomingMessage(sock, msg) {
   }
 }
 
+let activeSock = null;
+let reconnectTimer = null;
+
+function scheduleReconnect(delayMs = 3000) {
+  if (reconnectTimer) return;
+  reconnectTimer = setTimeout(() => {
+    reconnectTimer = null;
+    startWhatsApp().catch((err) => {
+      state.lastError = String(err);
+      console.error("Ralat menyambung semula WhatsApp:", err);
+      scheduleReconnect(5000);
+    });
+  }, delayMs);
+}
+
 async function startWhatsApp() {
+  if (activeSock) {
+    try {
+      activeSock.ev.removeAllListeners();
+      activeSock.end(undefined);
+    } catch (_) {}
+    activeSock = null;
+  }
+
   fs.mkdirSync(AUTH_DIR, { recursive: true });
   const { state: authState, saveCreds } = await useMultiFileAuthState(AUTH_DIR);
   const { version } = await fetchLatestBaileysVersion();
+  const waLogger = pino({ level: "warn" });
 
   const sock = makeWASocket({
     version,
-    auth: authState,
-    logger: pino({ level: "warn" }),
-    browser: ["CW Decoder", "Chrome", "1.0.0"],
+    auth: {
+      creds: authState.creds,
+      keys: makeCacheableSignalKeyStore(authState.keys, waLogger),
+    },
+    logger: waLogger,
+    browser: Browsers.ubuntu("Chrome"),
     printQRInTerminal: false,
     syncFullHistory: false,
+    markOnlineOnConnect: false,
+    keepAliveIntervalMs: 30000,
+    retryRequestDelayMs: 500,
+    msgRetryCounterCache,
+    getMessage: async (key) => {
+      if (!key?.id) return undefined;
+      return (
+        (key.remoteJid ? messageStore.get(`${key.remoteJid}:${key.id}`) : undefined) ||
+        messageStore.get(key.id) ||
+        undefined
+      );
+    },
   });
+
+  activeSock = sock;
 
   sock.ev.on("creds.update", saveCreds);
 
   sock.ev.on("connection.update", async (update) => {
+    if (activeSock !== sock) return;
     const { connection, lastDisconnect, qr } = update;
 
     if (qr) {
@@ -535,20 +621,23 @@ async function startWhatsApp() {
     if (connection === "close") {
       const statusCode = lastDisconnect?.error?.output?.statusCode;
       const loggedOut = statusCode === DisconnectReason.loggedOut;
+      const badSession =
+        statusCode === DisconnectReason.badSession ||
+        statusCode === DisconnectReason.connectionReplaced;
       state.connectedUser = null;
       state.lastError = lastDisconnect?.error?.message || `Disconnect code ${statusCode}`;
       console.log(`⚠️ Sambungan WhatsApp terputus (kod=${statusCode}). LoggedOut=${loggedOut}`);
 
-      if (loggedOut) {
-        // Clear old session so a fresh QR code is generated automatically
+      if (loggedOut || badSession) {
+        // Clear corrupted/replaced session so a fresh QR code is generated cleanly
         state.status = "reconnecting";
         try {
           fs.rmSync(AUTH_DIR, { recursive: true, force: true });
         } catch (_) {}
-        setTimeout(() => startWhatsApp().catch(console.error), 3000);
+        scheduleReconnect(3000);
       } else {
         state.status = "reconnecting";
-        setTimeout(() => startWhatsApp().catch(console.error), 3000);
+        scheduleReconnect(3000);
       }
     }
   });
@@ -556,6 +645,7 @@ async function startWhatsApp() {
   sock.ev.on("messages.upsert", async ({ messages, type }) => {
     if (type !== "notify") return;
     for (const msg of messages) {
+      rememberMessageContent(msg);
       try {
         await handleIncomingMessage(sock, msg);
       } catch (err) {
@@ -575,6 +665,9 @@ function renderQrHtml() {
       <p>Bot <b>CW Decoder WhatsApp</b> sedang aktif!</p>
       <p class="small">Akaun: <code>${state.connectedUser || "WhatsApp"}</code></p>
       <p>Cuba hantar <b>voice note bunyi CW</b> atau taip <code>/help</code> di WhatsApp anda (boleh juga hantar ke chat diri sendiri / <i>Message Yourself</i>).</p>
+      <form method="POST" action="/reset" style="margin-top:16px">
+        <button type="submit" style="background:#7f1d1d;color:#fecaca;border:none;padding:8px 14px;border-radius:8px;cursor:pointer;font-size:0.85rem">Reset Sesi &amp; Jana QR Baharu</button>
+      </form>
     `;
   } else if (state.qrDataUrl) {
     bodyContent = `
@@ -635,6 +728,29 @@ const server = http.createServer((req, res) => {
         started_at: state.startedAt,
       })
     );
+    return;
+  }
+
+  if (url === "/reset" && req.method === "POST") {
+    state.status = "reconnecting";
+    state.qrText = null;
+    state.qrDataUrl = null;
+    state.connectedUser = null;
+    if (activeSock) {
+      try {
+        activeSock.ev.removeAllListeners();
+        activeSock.end(undefined);
+      } catch (_) {}
+      activeSock = null;
+    }
+    try {
+      fs.rmSync(AUTH_DIR, { recursive: true, force: true });
+    } catch (_) {}
+    messageStore.clear();
+    msgRetryCounterCache.flushAll();
+    scheduleReconnect(1000);
+    res.writeHead(303, { Location: "/qr" });
+    res.end();
     return;
   }
 
