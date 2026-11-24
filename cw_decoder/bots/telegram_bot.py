@@ -122,6 +122,16 @@ class TelegramCWBot:
                 return doc["file_id"], (ext or ".wav")
         return None
 
+    def _extract_reply_text(self, message: dict[str, Any]) -> str | None:
+        """Return text or caption from the replied-to message, if any."""
+        reply = message.get("reply_to_message")
+        if not isinstance(reply, dict):
+            return None
+        reply_text = reply.get("text") or reply.get("caption")
+        if isinstance(reply_text, str) and reply_text.strip():
+            return reply_text.strip()
+        return None
+
     def process_update(self, update: dict[str, Any]) -> None:
         """Process a single Telegram Update dict."""
         message = update.get("message") or update.get("edited_message")
@@ -172,7 +182,8 @@ class TelegramCWBot:
             )
             return
 
-        action, payload = handle_simple_text_command(text)
+        reply_text = self._extract_reply_text(message)
+        action, payload = handle_simple_text_command(text, reply_text=reply_text)
         if action == "reply" and isinstance(payload, str):
             self.send_message(chat_id, payload, reply_to_message_id=message_id)
         elif action == "encode" and isinstance(payload, EncodeCommand):
@@ -181,9 +192,17 @@ class TelegramCWBot:
             try:
                 opts = EncodeOptions(wpm=payload.wpm, freq_hz=payload.freq_hz)
                 _, morse = self.encoder.encode_text_to_wav(payload.text, tmp_wav, options=opts)
+                if not morse:
+                    self.send_message(
+                        chat_id,
+                        "⚠️ Tiada aksara yang boleh ditukar kepada kod Morse dalam teks tersebut.",
+                        reply_to_message_id=message_id,
+                    )
+                    return
+                safe_text = payload.text.upper().replace("`", "'")
                 caption = (
                     f"🔊 *Audio CW Dijana*\n"
-                    f"*Teks:* `{payload.text.upper()}`\n"
+                    f"*Teks:* `{safe_text}`\n"
                     f"*Morse:* `{morse}`\n"
                     f"_{payload.wpm:.0f} WPM @ {payload.freq_hz:.0f} Hz_"
                 )

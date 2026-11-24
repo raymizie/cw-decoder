@@ -5,6 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
+from cw_decoder.bots.formatting import EncodeCommand, handle_simple_text_command, parse_encode_command
 from cw_decoder.bots.telegram_bot import TelegramCWBot
 from cw_decoder.bots.whatsapp_bot import create_whatsapp_app
 from cw_decoder.config import TelegramConfig, WhatsAppConfig
@@ -190,3 +191,157 @@ def test_whatsapp_twilio_audio_and_encode(tmp_path: Path):
     media_resp = client.get(media_route)
     assert media_resp.status_code == 200
     assert media_resp.data[:4] == b"RIFF"
+
+
+def test_parse_encode_command_with_reply_fallback():
+    # Plain reply `/encode`
+    action, payload = handle_simple_text_command("/encode", reply_text="SELAMAT PAGI")
+    assert action == "encode"
+    assert isinstance(payload, EncodeCommand)
+    assert payload.text == "SELAMAT PAGI"
+    assert payload.wpm == 20.0
+    assert payload.freq_hz == 700.0
+
+    # Reply `/encode` with custom options only
+    action, payload = handle_simple_text_command("/encode --wpm 15 --freq 600", reply_text="CQ\n  DE 9M2CW")
+    assert action == "encode"
+    assert isinstance(payload, EncodeCommand)
+    assert payload.text == "CQ DE 9M2CW"
+    assert payload.wpm == 15.0
+    assert payload.freq_hz == 600.0
+
+    # Explicit inline text overrides replied text
+    parsed = parse_encode_command("--wpm 18 OVERRIDE", fallback_text="IGNORED")
+    assert parsed == EncodeCommand(text="OVERRIDE", wpm=18.0, freq_hz=700.0)
+
+    # No inline text and no reply -> helpful usage prompt
+    action, msg = handle_simple_text_command("/encode")
+    assert action == "reply"
+    assert isinstance(msg, str)
+    assert "Reply" in msg
+
+
+def test_telegram_bot_reply_encode():
+    mock_session = _MockSession()
+    bot = TelegramCWBot(TelegramConfig(bot_token="123:TEST"), session=mock_session)  # type: ignore[arg-type]
+
+    # 1. Reply `/encode` to a text message
+    bot.process_update(
+        {
+            "update_id": 10,
+            "message": {
+                "message_id": 20,
+                "chat": {"id": 555},
+                "text": "/encode",
+                "reply_to_message": {"message_id": 19, "text": "HELLO CW"},
+            },
+        }
+    )
+    audio_calls = [c for c in mock_session.calls if c[1].endswith("/sendAudio")]
+    assert len(audio_calls) == 1
+    assert "HELLO CW" in audio_calls[0][2]["data"]["caption"]
+
+    # 2. Reply `/encode --wpm 16 --freq 650` to a captioned message
+    bot.process_update(
+        {
+            "update_id": 11,
+            "message": {
+                "message_id": 21,
+                "chat": {"id": 555},
+                "text": "/encode --wpm 16 --freq 650",
+                "reply_to_message": {"message_id": 18, "caption": "TEST CAPTION"},
+            },
+        }
+    )
+    audio_calls = [c for c in mock_session.calls if c[1].endswith("/sendAudio")]
+    assert len(audio_calls) == 2
+    assert "TEST CAPTION" in audio_calls[1][2]["data"]["caption"]
+    assert "16 WPM @ 650 Hz" in audio_calls[1][2]["data"]["caption"]
+
+    # 3. Reply `/encode` to emoji-only text returns warning instead of empty audio
+    bot.process_update(
+        {
+            "update_id": 12,
+            "message": {
+                "message_id": 22,
+                "chat": {"id": 555},
+                "text": "/encode",
+                "reply_to_message": {"message_id": 17, "text": "😀😀"},
+            },
+        }
+    )
+    audio_calls = [c for c in mock_session.calls if c[1].endswith("/sendAudio")]
+    assert len(audio_calls) == 2
+    msg_calls = [c for c in mock_session.calls if c[1].endswith("/sendMessage")]
+    assert len(msg_calls) == 1
+    assert "Tiada aksara" in msg_calls[0][2]["json"]["text"]
+
+
+def test_whatsapp_meta_reply_encode():
+    mock_session = _MockSession()
+    cfg = WhatsAppConfig(
+        meta_verify_token="secret-token",
+        meta_access_token="ACCESS_123",
+        meta_phone_number_id="PHONE_456",
+    )
+    app = create_whatsapp_app(config=cfg, session=mock_session)  # type: ignore[arg-type]
+    client = app.test_client()
+
+    # Step 1: Original text message arrives and is remembered by ID
+    first_payload = {
+        "object": "whatsapp_business_account",
+        "entry": [
+            {
+                "changes": [
+                    {
+                        "value": {
+                            "messages": [
+                                {
+                                    "id": "wamid.ORIG_1",
+                                    "from": "60123456789",
+                                    "type": "text",
+                                    "text": {"body": "SALAM 73"},
+                                }
+                            ]
+                        }
+                    }
+                ]
+            }
+        ],
+    }
+    assert client.post("/webhook/meta", json=first_payload).status_code == 200
+
+    # Step 2: User replies with `/encode --wpm 15` referencing original message ID
+    reply_payload = {
+        "object": "whatsapp_business_account",
+        "entry": [
+            {
+                "changes": [
+                    {
+                        "value": {
+                            "messages": [
+                                {
+                                    "id": "wamid.REPLY_2",
+                                    "from": "60123456789",
+                                    "type": "text",
+                                    "context": {"id": "wamid.ORIG_1"},
+                                    "text": {"body": "/encode --wpm 15"},
+                                }
+                            ]
+                        }
+                    }
+                ]
+            }
+        ],
+    }
+    resp = client.post("/webhook/meta", json=reply_payload)
+    assert resp.status_code == 200
+
+    media_uploads = [c for c in mock_session.calls if c[0] == "POST" and c[1].endswith("/media")]
+    assert len(media_uploads) == 1
+    sent_texts = [
+        c[2]["json"]["text"]["body"]
+        for c in mock_session.calls
+        if c[0] == "POST" and c[1].endswith("/PHONE_456/messages") and c[2]["json"].get("type") == "text"
+    ]
+    assert any("SALAM 73" in t and "15 WPM" in t for t in sent_texts)

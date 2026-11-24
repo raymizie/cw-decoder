@@ -74,7 +74,7 @@ python cw_cli.py morse ".... . .-.. .-.. ---"
    python run_telegram.py
    ```
 4. Hantar **voice note** atau fail audio CW kepada bot anda! Anda juga boleh guna arahan:
-   - `/encode HELLO WORLD` atau `/encode --wpm 18 --freq 750 CQ CQ`
+   - `/encode HELLO WORLD`, `/encode --wpm 18 --freq 750 CQ CQ`, atau **Reply** mana-mana mesej teks dengan `/encode`
    - `/morse .... . .-.. .-.. ---`
    - `/tomorse HELLO`
    - `/status`
@@ -102,19 +102,22 @@ Projek ini menggunakan [Dockerfile](Dockerfile) (Node.js Baileys + Python CW Dec
    - Sambungkan repositori GitHub `cw-decoder`.
    - Pilih **Runtime / Language**: `Docker` (atau biar Render kesan `Dockerfile` secara automatik).
    - **Tiada Environment Variable / Token wajib diisi!** Terus klik **Create Web Service**.
-3. **Imbas Kod QR**:
+3. **Imbas Kod QR (Sokongan Multi-Pengguna — Maksimum 10 Orang Serentak)**:
    - Selepas *deploy* selesai, buka URL Render anda di pelayar:
      `https://<nama-app-anda>.onrender.com/qr`
    - Di telefon anda: buka **WhatsApp → Peranti Dipautkan (Linked Devices) → Pautkan Peranti** → imbas kod QR di skrin.
+   - Selepas seorang pengguna berjaya paut peranti, **kod QR baharu akan dijana secara automatik** untuk pengguna seterusnya sehingga maksimum **10 pengguna serentak** (`MAX_SESSIONS=10`).
+   - Halaman `/qr` memaparkan **info pengguna aktif** (nama, nombor, masa mula, baki masa secara langsung, statistik decode/encode, dan butang Log Keluar).
+   - Setiap pengguna mempunyai tempoh aktif selama **1 jam** (`SESSION_TTL_MINUTES=60`) selepas bersambung, kemudian **auto-logout** dan slot akan kosong untuk orang lain. Taip `/masa` di WhatsApp untuk semak baki masa sesi.
 4. **Cuba terus di WhatsApp (Chat Peribadi & Group)**:
    - **Chat peribadi / diri sendiri (*Message Yourself*)**:
      - Taip `/help`
-     - Taip `/encode HELLO WORLD` → bot balas *voice note* bunyi CW!
+     - Taip `/encode HELLO WORLD` atau **Reply** mana-mana mesej teks dengan `/encode` → bot balas *voice note* bunyi CW!
      - Hantar **voice note / audio bunyi CW** → bot terus balas teks dinyahkod, kod Morse, WPM & frekuensi (Hz)!
    - **Dalam WhatsApp Group** (cuma masukkan nombor bot ke dalam group):
      - **Cara 1 (On-demand — default, tidak ganggu voice note biasa)**: *Reply* mana-mana *voice note* / fail audio dalam group dengan `/decode` (atau `!decode`).
      - **Cara 2 (Auto-decode semua audio dalam group tersebut)**: Taip `/cwauto on` dalam group (taip `/cwauto off` untuk matikan), atau tetapkan `ALLOW_GROUP_AUDIO=true` pada Environment Variables di Render supaya aktif untuk semua group.
-     - Arahan `/help`, `/encode <teks>`, `/morse <kod>`, `/tomorse <teks>` sentiasa berfungsi dalam group (termasuk daripada nombor anda sendiri).
+     - Arahan `/help`, `/encode <teks>` (atau *Reply* teks dengan `/encode`), `/morse <kod>`, `/tomorse <teks>` sentiasa berfungsi dalam group (termasuk daripada nombor anda sendiri).
 
 > **Nota Render Free Tier**: Pelan percuma Render memadam cakera sementara apabila servis dimulakan semula / di-deploy semula, jadi jika servis tidur lama atau di-redeploy, cuma buka `/qr` semula dan imbas dalam 5 saat.
 

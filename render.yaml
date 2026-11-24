@@ -7,5 +7,9 @@ services:
     envVars:
       - key: ALLOW_GROUP_AUDIO
         value: "false"
+      - key: MAX_SESSIONS
+        value: "10"
+      - key: SESSION_TTL_MINUTES
+        value: "60"
       - key: KEEPALIVE_URLS
         value: ""

@@ -145,6 +145,15 @@ def create_whatsapp_app(
     app = Flask("cw_decoder_whatsapp")
     media_dir = Path(tempfile.mkdtemp(prefix="cw_wa_media_"))
     media_registry: dict[str, tuple[Path, float]] = {}
+    recent_text_messages: dict[str, str] = {}
+
+    def _remember_text_message(msg_id: str | None, body: str) -> None:
+        if not msg_id or not body.strip():
+            return
+        recent_text_messages[msg_id] = body.strip()
+        if len(recent_text_messages) > 1000:
+            oldest = next(iter(recent_text_messages))
+            recent_text_messages.pop(oldest, None)
 
     def _cleanup_old_media(ttl_sec: float = 900.0) -> None:
         now = time.time()
@@ -194,14 +203,24 @@ def create_whatsapp_app(
 
                     elif msg_type == "text":
                         body = (msg.get("text") or {}).get("body", "")
-                        action, cmd_payload = handle_simple_text_command(body)
+                        _remember_text_message(msg.get("id"), body)
+                        reply_to_id = (msg.get("context") or {}).get("id")
+                        reply_text = recent_text_messages.get(reply_to_id) if reply_to_id else None
+                        action, cmd_payload = handle_simple_text_command(body, reply_text=reply_text)
                         if action == "reply" and isinstance(cmd_payload, str):
                             meta_client.send_text(sender, cmd_payload)
                         elif action == "encode" and isinstance(cmd_payload, EncodeCommand):
                             _, wav_path, morse = _register_wav(cmd_payload)
+                            if not morse:
+                                meta_client.send_text(
+                                    sender,
+                                    "⚠️ Tiada aksara yang boleh ditukar kepada kod Morse dalam teks tersebut.",
+                                )
+                                continue
+                            safe_text = cmd_payload.text.upper().replace("`", "'")
                             caption = (
                                 f"🔊 *Audio CW Dijana*\n"
-                                f"*Teks:* `{cmd_payload.text.upper()}`\n"
+                                f"*Teks:* `{safe_text}`\n"
                                 f"*Morse:* `{morse}` ({cmd_payload.wpm:.0f} WPM @ {cmd_payload.freq_hz:.0f} Hz)"
                             )
                             try:
@@ -258,11 +277,14 @@ def create_whatsapp_app(
             return _twiml_response(cmd_payload)
         if action == "encode" and isinstance(cmd_payload, EncodeCommand):
             token, _, morse = _register_wav(cmd_payload)
+            if not morse:
+                return _twiml_response("⚠️ Tiada aksara yang boleh ditukar kepada kod Morse dalam teks tersebut.")
             base_url = cfg.public_base_url or request.url_root.rstrip("/")
             media_url = f"{base_url}/media/{token}.wav" if cfg.public_base_url else None
+            safe_text = cmd_payload.text.upper().replace("`", "'")
             caption = (
                 f"🔊 *Audio CW Dijana*\n"
-                f"*Teks:* `{cmd_payload.text.upper()}`\n"
+                f"*Teks:* `{safe_text}`\n"
                 f"*Morse:* `{morse}`\n"
                 f"_{cmd_payload.wpm:.0f} WPM @ {cmd_payload.freq_hz:.0f} Hz_"
             )

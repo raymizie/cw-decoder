@@ -15,8 +15,8 @@ HELP_TEXT = (
     "dan saya akan nyahkod bunyi Morse kepada perkataan secara automatik!\n\n"
     "*Arahan Tersedia:*\n"
     "• Hantar audio/voice note → Nyahkod CW kepada teks\n"
-    "• `/encode <teks>` → Jana audio bunyi CW (.wav)\n"
-    "  _(Contoh: `/encode --wpm 18 --freq 700 HELLO WORLD`)_\n"
+    "• `/encode <teks>` atau *Reply* teks dengan `/encode` → Jana audio bunyi CW (.wav)\n"
+    "  _(Contoh: `/encode --wpm 18 --freq 700 HELLO WORLD` atau Reply teks dengan `/encode`)_\n"
     "• `/morse <kod>` → Nyahkod teks Morse terus\n"
     "  _(Contoh: `/morse .... . .-.. .-.. ---`)_\n"
     "• `/tomorse <teks>` → Tukar teks kepada simbol Morse\n"
@@ -50,15 +50,17 @@ def format_decode_reply(result: DecodeResult) -> str:
     )
 
 
-def parse_encode_command(raw_args: str) -> EncodeCommand | None:
-    """Parse arguments for `/encode [--wpm N] [--freq HZ] <text>`."""
-    if not raw_args or not raw_args.strip():
-        return None
+def parse_encode_command(raw_args: str, fallback_text: str | None = None) -> EncodeCommand | None:
+    """Parse arguments for `/encode [--wpm N] [--freq HZ] [<text>]`.
 
-    try:
-        tokens = shlex.split(raw_args)
-    except ValueError:
-        tokens = raw_args.split()
+    If no inline text is given, falls back to `fallback_text` (e.g. from a replied message).
+    """
+    tokens: list[str] = []
+    if raw_args and raw_args.strip():
+        try:
+            tokens = shlex.split(raw_args)
+        except ValueError:
+            tokens = raw_args.split()
 
     wpm = 20.0
     freq_hz = 700.0
@@ -84,12 +86,17 @@ def parse_encode_command(raw_args: str) -> EncodeCommand | None:
         i += 1
 
     text = " ".join(text_parts).strip()
+    if not text and fallback_text:
+        text = " ".join(fallback_text.split()).strip()
     if not text:
         return None
     return EncodeCommand(text=text, wpm=wpm, freq_hz=freq_hz)
 
 
-def handle_simple_text_command(message_text: str) -> tuple[str, str | EncodeCommand]:
+def handle_simple_text_command(
+    message_text: str,
+    reply_text: str | None = None,
+) -> tuple[str, str | EncodeCommand]:
     """Classify an incoming text message.
 
     Returns (action, payload):
@@ -112,11 +119,12 @@ def handle_simple_text_command(message_text: str) -> tuple[str, str | EncodeComm
         return "reply", HELP_TEXT
 
     if cmd_word in ("/encode", "encode", "/cw"):
-        parsed = parse_encode_command(rest)
+        parsed = parse_encode_command(rest, fallback_text=reply_text)
         if not parsed:
             return (
                 "reply",
-                "Sila masukkan teks selepas `/encode`.\nContoh: `/encode HELLO WORLD` atau `/encode --wpm 18 CQ CQ`",
+                "Sila masukkan teks selepas `/encode` atau *Reply* mesej teks dengan `/encode`.\n"
+                "Contoh: `/encode HELLO WORLD`, `/encode --wpm 18 CQ CQ`, atau *Reply* teks dengan `/encode`.",
             )
         return "encode", parsed
 
